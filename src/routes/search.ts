@@ -1,5 +1,5 @@
 import { Router, Request, Response } from 'express'
-import { supabase } from '../services/supabase.service.js'
+import { supabase, supabaseAdmin } from '../services/supabase.service.js'
 
 const router = Router()
 
@@ -86,14 +86,33 @@ router.get('/blogs', async (req: Request, res: Response): Promise<void> => {
             .select('id, nickname')
             .in('id', userIds)
 
+        // auth.users에서 카카오 프로필 가져오기
+        const { data: users } = await supabaseAdmin.auth.admin.listUsers()
+        const userMap = new Map(
+            (users?.users || [])
+                .filter((u) => userIds.includes(u.id))
+                .map((u) => [u.id, u.user_metadata?.avatar_url || u.user_metadata?.picture || null])
+        )
+
         const profileMap = new Map(
             (profiles || []).map((p) => [p.id, p])
         )
 
-        const blogsWithProfiles = (blogs || []).map((blog) => ({
-            ...blog,
-            profile: profileMap.get(blog.user_id) || null,
-        }))
+        const blogsWithProfiles = (blogs || []).map((blog) => {
+            const profile = profileMap.get(blog.user_id)
+            const authProfileImage = userMap.get(blog.user_id)
+            return {
+                ...blog,
+                profile: profile ? {
+                    ...profile,
+                    profile_image_url: profile.profile_image_url || authProfileImage,
+                } : {
+                    id: blog.user_id,
+                    nickname: null,
+                    profile_image_url: authProfileImage,
+                },
+            }
+        })
 
         res.json(blogsWithProfiles)
     } catch (error) {
