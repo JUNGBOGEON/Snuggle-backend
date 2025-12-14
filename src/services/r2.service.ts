@@ -10,17 +10,33 @@ export const r2Client = new S3Client({
   },
 })
 
+export interface UploadOptions {
+  cacheControl?: string
+  isTemporary?: boolean
+}
+
+// 캐시 설정 상수
+const CACHE_PERMANENT = 'public, max-age=31536000, immutable' // 1년 (영구 이미지)
+const CACHE_TEMPORARY = 'public, max-age=3600' // 1시간 (임시 이미지)
+
 export async function uploadToR2(
   buffer: Buffer,
   key: string,
-  contentType: string
+  contentType: string,
+  options: UploadOptions = {}
 ): Promise<string> {
+  const { isTemporary = false, cacheControl } = options
+
+  // 캐시 헤더 결정
+  const finalCacheControl = cacheControl || (isTemporary ? CACHE_TEMPORARY : CACHE_PERMANENT)
+
   await r2Client.send(
     new PutObjectCommand({
       Bucket: env.r2.bucketName,
       Key: key,
       Body: buffer,
       ContentType: contentType,
+      CacheControl: finalCacheControl,
     })
   )
 
