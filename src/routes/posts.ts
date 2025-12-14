@@ -160,8 +160,8 @@ router.get('/:id', async (req: Request, res: Response): Promise<void> => {
 
 
       if (!isOwner) {
-        // 권한 없음 시 404 리턴 (보안상 존재 여부 숨김)
-        res.status(404).json({ error: 'Post not found' })
+        // 권한 없음 시 403 리턴 (리스트에는 노출되므로 존재 여부는 숨기지 않음)
+        res.status(403).json({ error: 'Private post' })
         return
       }
     }
@@ -223,17 +223,20 @@ router.post('/', authMiddleware, async (req: AuthenticatedRequest, res: Response
     const authClient = createAuthenticatedClient(token)
 
     // content에서 첫 번째 이미지를 썸네일로 추출
-    const thumbnailUrl = content ? extractFirstImageUrl(content) : null
+    const { title: newTitle, content: newContent, category_ids: newCategoryIds, published: newPublished, is_private, is_allow_comment, thumbnail_url } = req.body
 
     const { data, error } = await authClient
       .from('posts')
       .insert({
         blog_id,
         user_id: user.id,
-        title: title.trim(),
-        content: content || '',
-        published: published ?? true,
-        thumbnail_url: thumbnailUrl,
+        title: newTitle.trim(),
+        content: newContent || '',
+        // published: published ?? true, // 삭제 (is_private로 대체) -> DB Default가 무엇인지 모르므로 우선 true 강제
+        published: true,
+        is_private: is_private ?? false, // 기본 공개
+        // is_allow_comment: is_allow_comment ?? true, // DB 컬럼 없음 대비 임시 주석
+        thumbnail_url: thumbnail_url || extractFirstImageUrl(newContent),
       })
       .select()
       .single()
@@ -306,8 +309,10 @@ router.patch('/:id', authMiddleware, async (req: AuthenticatedRequest, res: Resp
     // if (published !== undefined) updateData.published = published
 
     // 요청: is_private 추가
-    const { is_private } = req.body
+    const { is_private, is_allow_comment, thumbnail_url } = req.body
     if (is_private !== undefined) (updateData as any).is_private = is_private
+    // if (is_allow_comment !== undefined) (updateData as any).is_allow_comment = is_allow_comment // DB 컬럼 없음 대비 임시 주석
+    if (thumbnail_url !== undefined) updateData.thumbnail_url = thumbnail_url
 
     const { data, error } = await authClient
       .from('posts')
