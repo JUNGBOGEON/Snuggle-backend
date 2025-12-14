@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express'
 import { AuthenticatedRequest, authMiddleware } from '../middleware/auth.js'
-import { createAuthenticatedClient, supabase } from '../services/supabase.service.js'
+import { writeLimiter } from '../middleware/rateLimit.js'
+import { createAuthenticatedClient, supabase, supabaseAdmin } from '../services/supabase.service.js'
 
 const router = Router()
 
@@ -28,18 +29,39 @@ router.get('/', async (req: Request, res: Response): Promise<void> => {
       return
     }
 
-    // 각 포스트의 블로그 정보 가져오기
+    // 각 포스트의 블로그 및 프로필 정보 가져오기
     const postsWithDetails = await Promise.all(
       (posts || []).map(async (post) => {
         const { data: blog } = await supabase
           .from('blogs')
-          .select('name, thumbnail_url')
+          .select('name, thumbnail_url, user_id')
           .eq('id', post.blog_id)
           .single()
 
+        let profileImageUrl = blog?.thumbnail_url
+        if (!profileImageUrl && blog?.user_id) {
+          // profiles 테이블에서 확인
+          const { data: profile } = await supabase
+            .from('profiles')
+            .select('profile_image_url')
+            .eq('id', blog.user_id)
+            .single()
+
+          profileImageUrl = profile?.profile_image_url
+
+          // auth.users에서 카카오 프로필 가져오기
+          if (!profileImageUrl) {
+            const { data: { user } } = await supabaseAdmin.auth.admin.getUserById(blog.user_id)
+            profileImageUrl = user?.user_metadata?.avatar_url || user?.user_metadata?.picture || null
+          }
+        }
+
         return {
           ...post,
-          blog: blog ? { name: blog.name, thumbnail_url: blog.thumbnail_url } : null,
+          blog: blog ? {
+            name: blog.name,
+            thumbnail_url: profileImageUrl,
+          } : null,
         }
       })
     )
@@ -165,11 +187,25 @@ router.get('/:id', async (req: Request, res: Response): Promise<void> => {
       .eq('id', blog.user_id)
       .single()
 
+    // profile_image_url이 없으면 auth.users에서 카카오 프로필 가져오기
+    let profileImageUrl = profile?.profile_image_url
+    if (!profileImageUrl) {
+      const { data: { user } } = await supabaseAdmin.auth.admin.getUserById(blog.user_id)
+      profileImageUrl = user?.user_metadata?.avatar_url || user?.user_metadata?.picture || null
+    }
+
     res.json({
       ...post,
       blog,
       category,
-      profile,
+      profile: profile ? {
+        ...profile,
+        profile_image_url: profileImageUrl,
+      } : {
+        id: blog.user_id,
+        nickname: null,
+        profile_image_url: profileImageUrl,
+      },
     })
   } catch (error) {
     console.error('Get post error:', error)
@@ -178,7 +214,7 @@ router.get('/:id', async (req: Request, res: Response): Promise<void> => {
 })
 
 // 게시글 생성 (인증 필요)
-router.post('/', authMiddleware, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+router.post('/', writeLimiter, authMiddleware, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const user = req.user!
     const { blog_id, title, content, category_ids, published } = req.body
@@ -245,7 +281,7 @@ router.post('/', authMiddleware, async (req: AuthenticatedRequest, res: Response
 })
 
 // 게시글 수정 (인증 필요)
-router.patch('/:id', authMiddleware, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+router.patch('/:id', writeLimiter, authMiddleware, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const user = req.user!
     const { id } = req.params
@@ -327,7 +363,7 @@ router.patch('/:id', authMiddleware, async (req: AuthenticatedRequest, res: Resp
 })
 
 // 게시글 삭제 (인증 필요)
-router.delete('/:id', authMiddleware, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+router.delete('/:id', writeLimiter, authMiddleware, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const user = req.user!
     const { id } = req.params
