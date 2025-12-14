@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express'
 import { AuthenticatedRequest, authMiddleware } from '../middleware/auth.js'
-import { createAuthenticatedClient, supabase } from '../services/supabase.service.js'
+import { writeLimiter } from '../middleware/rateLimit.js'
+import { createAuthenticatedClient, supabase, supabaseAdmin } from '../services/supabase.service.js'
 
 const router = Router()
 
@@ -9,6 +10,62 @@ function extractFirstImageUrl(content: string): string | null {
   const imgMatch = content.match(/<img[^>]+src=["']([^"']+)["']/)
   return imgMatch ? imgMatch[1] : null
 }
+
+// 피드 목록 조회 (구독한 블로거의 글)
+router.get('/feed', authMiddleware, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const user = req.user!
+    const limit = parseInt(req.query.limit as string) || 14
+
+    // 1. 내가 구독한 사람들의 ID (subed_id) 가져오기
+    const { data: subscribed, error: subError } = await supabase
+      .from('subscribe')
+      .select('subed_id')
+      .eq('sub_id', user.id)
+
+    if (subError) throw subError
+
+    const subscribedUserIds = subscribed.map((row: any) => row.subed_id)
+
+    if (subscribedUserIds.length === 0) {
+      res.json([])
+      return
+    }
+
+    // 2. 해당 유저들의 글 가져오기
+    const { data: posts, error: postError } = await supabase
+      .from('posts')
+      .select(`
+            id, title, content, thumbnail_url, created_at, blog_id, user_id,
+            blog:blogs ( name, thumbnail_url, user_id )
+        `)
+      .in('user_id', subscribedUserIds)
+      .eq('published', true)
+      .order('created_at', { ascending: false })
+      .limit(limit)
+
+    if (postError) throw postError
+
+    // Transform response to match frontend expectation
+    const result = posts.map((post: any) => ({
+      id: post.id,
+      title: post.title,
+      content: post.content,
+      thumbnail_url: post.thumbnail_url,
+      created_at: post.created_at,
+      blog_id: post.blog_id,
+      blog: post.blog ? {
+        name: post.blog.name || '',
+        thumbnail_url: post.blog.thumbnail_url || null,
+      } : null,
+    }))
+
+    res.json(result)
+  } catch (error) {
+    console.error('Feed error:', error)
+    res.status(500).json({ error: 'Failed to fetch feed' })
+  }
+})
 
 // 전체 게시글 목록 (공개글만, 인증 불필요)
 router.get('/', async (req: Request, res: Response): Promise<void> => {
@@ -19,8 +76,9 @@ router.get('/', async (req: Request, res: Response): Promise<void> => {
     const { data: posts, error } = await supabase
       .from('posts')
       .select('id, title, content, thumbnail_url, created_at, blog_id')
-      .eq('published', true)
+      // .eq('published', true) // 목록에서는 모든 글 노출 (요청사항 반영)
       .order('created_at', { ascending: false })
+
       .range(offset, offset + limit - 1)
 
     if (error) {
@@ -28,18 +86,39 @@ router.get('/', async (req: Request, res: Response): Promise<void> => {
       return
     }
 
-    // 각 포스트의 블로그 정보 가져오기
+    // 각 포스트의 블로그 및 프로필 정보 가져오기
     const postsWithDetails = await Promise.all(
       (posts || []).map(async (post) => {
         const { data: blog } = await supabase
           .from('blogs')
-          .select('name, thumbnail_url')
+          .select('name, thumbnail_url, user_id')
           .eq('id', post.blog_id)
-          .single()
+          .maybeSingle()
+
+        let profileImageUrl = blog?.thumbnail_url
+        if (!profileImageUrl && blog?.user_id) {
+          // profiles 테이블에서 확인
+          const { data: profile } = await supabase
+            .from('profiles')
+            .select('profile_image_url')
+            .eq('id', blog.user_id)
+            .single()
+
+          profileImageUrl = profile?.profile_image_url
+
+          // auth.users에서 카카오 프로필 가져오기
+          if (!profileImageUrl) {
+            const { data: { user } } = await supabaseAdmin.auth.admin.getUserById(blog.user_id)
+            profileImageUrl = user?.user_metadata?.avatar_url || user?.user_metadata?.picture || null
+          }
+        }
 
         return {
           ...post,
-          blog: blog ? { name: blog.name, thumbnail_url: blog.thumbnail_url } : null,
+          blog: blog ? {
+            name: blog.name,
+            thumbnail_url: profileImageUrl,
+          } : null,
         }
       })
     )
@@ -70,7 +149,7 @@ router.get('/blog/:blogId', async (req: Request, res: Response): Promise<void> =
           .from('blogs')
           .select('user_id')
           .eq('id', blogId)
-          .single()
+          .maybeSingle()
 
         isOwner = blog?.user_id === user.id
       }
@@ -82,10 +161,10 @@ router.get('/blog/:blogId', async (req: Request, res: Response): Promise<void> =
       .eq('blog_id', blogId)
       .order('created_at', { ascending: false })
 
-    // 소유자가 아니면 공개글만
-    if (!isOwner) {
-      query = query.eq('published', true)
-    }
+    // 소유자가 아니면 공개글만 -> 이제 목록에서는 모두 노출
+    // if (!isOwner) {
+    //   query = query.eq('published', true)
+    // }
 
     const { data, error } = await query
 
@@ -123,26 +202,44 @@ router.get('/:id', async (req: Request, res: Response): Promise<void> => {
       .from('blogs')
       .select('id, user_id, name, thumbnail_url')
       .eq('id', post.blog_id)
-      .single()
+      .maybeSingle()
 
     if (!blog) {
       res.status(404).json({ error: 'Blog not found' })
       return
     }
 
+    // 디버깅: 전체 포스트 데이터 확인
+    console.log('Post Data Check:', post)
+
     // 비공개 글 접근 권한 확인
-    if (!post.published) {
+    // 요청사항: is_private(TRUE=비공개)만 사용하여 제어
+    const isPrivate = (post as any).is_private === true
+
+    if (isPrivate) {
       let isOwner = false
 
       if (authHeader?.startsWith('Bearer ')) {
         const token = authHeader.split(' ')[1]
         const authClient = createAuthenticatedClient(token)
         const { data: { user } } = await authClient.auth.getUser()
-        isOwner = user?.id === blog.user_id
+
+        // 디버깅 로그
+        console.log('Debug Private Access:', {
+          postId: post.id,
+          postUserId: post.user_id,
+          requestUserId: user?.id,
+          isMatch: user?.id === post.user_id
+        })
+
+        // 요청대로 posts의 user_id와 현재 로그인한 유저의 id를 비교
+        isOwner = user?.id === post.user_id
       }
 
+
       if (!isOwner) {
-        res.status(404).json({ error: 'Post not found' })
+        // 권한 없음 시 403 리턴 (리스트에는 노출되므로 존재 여부는 숨기지 않음)
+        res.status(403).json({ error: 'Private post' })
         return
       }
     }
@@ -163,13 +260,27 @@ router.get('/:id', async (req: Request, res: Response): Promise<void> => {
       .from('profiles')
       .select('id, nickname, profile_image_url')
       .eq('id', blog.user_id)
-      .single()
+      .maybeSingle()
+
+    // profile_image_url이 없으면 auth.users에서 카카오 프로필 가져오기
+    let profileImageUrl = profile?.profile_image_url
+    if (!profileImageUrl) {
+      const { data: { user } } = await supabaseAdmin.auth.admin.getUserById(blog.user_id)
+      profileImageUrl = user?.user_metadata?.avatar_url || user?.user_metadata?.picture || null
+    }
 
     res.json({
       ...post,
       blog,
       category,
-      profile,
+      profile: profile ? {
+        ...profile,
+        profile_image_url: profileImageUrl,
+      } : {
+        id: blog.user_id,
+        nickname: null,
+        profile_image_url: profileImageUrl,
+      },
     })
   } catch (error) {
     console.error('Get post error:', error)
@@ -178,7 +289,7 @@ router.get('/:id', async (req: Request, res: Response): Promise<void> => {
 })
 
 // 게시글 생성 (인증 필요)
-router.post('/', authMiddleware, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+router.post('/', writeLimiter, authMiddleware, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const user = req.user!
     const { blog_id, title, content, category_ids, published } = req.body
@@ -204,17 +315,20 @@ router.post('/', authMiddleware, async (req: AuthenticatedRequest, res: Response
     const authClient = createAuthenticatedClient(token)
 
     // content에서 첫 번째 이미지를 썸네일로 추출
-    const thumbnailUrl = content ? extractFirstImageUrl(content) : null
+    const { title: newTitle, content: newContent, category_ids: newCategoryIds, published: newPublished, is_private, is_allow_comment, thumbnail_url } = req.body
 
     const { data, error } = await authClient
       .from('posts')
       .insert({
         blog_id,
         user_id: user.id,
-        title: title.trim(),
-        content: content || '',
-        published: published ?? true,
-        thumbnail_url: thumbnailUrl,
+        title: newTitle.trim(),
+        content: newContent || '',
+        // published: published ?? true, // 삭제 (is_private로 대체) -> DB Default가 무엇인지 모르므로 우선 true 강제
+        published: true,
+        is_private: is_private ?? false, // 기본 공개
+        // is_allow_comment: is_allow_comment ?? true, // DB 컬럼 없음 대비 임시 주석
+        thumbnail_url: thumbnail_url || extractFirstImageUrl(newContent),
       })
       .select()
       .single()
@@ -245,7 +359,7 @@ router.post('/', authMiddleware, async (req: AuthenticatedRequest, res: Response
 })
 
 // 게시글 수정 (인증 필요)
-router.patch('/:id', authMiddleware, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+router.patch('/:id', writeLimiter, authMiddleware, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const user = req.user!
     const { id } = req.params
@@ -284,7 +398,13 @@ router.patch('/:id', authMiddleware, async (req: AuthenticatedRequest, res: Resp
       // content가 변경되면 썸네일도 업데이트
       updateData.thumbnail_url = extractFirstImageUrl(content)
     }
-    if (published !== undefined) updateData.published = published
+    // if (published !== undefined) updateData.published = published
+
+    // 요청: is_private 추가
+    const { is_private, is_allow_comment, thumbnail_url } = req.body
+    if (is_private !== undefined) (updateData as any).is_private = is_private
+    // if (is_allow_comment !== undefined) (updateData as any).is_allow_comment = is_allow_comment // DB 컬럼 없음 대비 임시 주석
+    if (thumbnail_url !== undefined) updateData.thumbnail_url = thumbnail_url
 
     const { data, error } = await authClient
       .from('posts')
@@ -327,7 +447,7 @@ router.patch('/:id', authMiddleware, async (req: AuthenticatedRequest, res: Resp
 })
 
 // 게시글 삭제 (인증 필요)
-router.delete('/:id', authMiddleware, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+router.delete('/:id', writeLimiter, authMiddleware, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const user = req.user!
     const { id } = req.params

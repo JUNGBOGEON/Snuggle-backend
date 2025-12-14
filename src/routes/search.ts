@@ -1,5 +1,5 @@
 import { Router, Request, Response } from 'express'
-import { supabase } from '../services/supabase.service.js'
+import { supabase, supabaseAdmin } from '../services/supabase.service.js'
 
 const router = Router()
 
@@ -19,7 +19,7 @@ router.get('/posts', async (req: Request, res: Response): Promise<void> => {
 
         const { data: posts, error } = await supabase
             .from('posts')
-            .select('id, title, content, thumbnail_url, created_at, blog_id')
+            .select('id, title, content, created_at, blog_id')
             .eq('published', true)
             .or(`title.ilike.${searchQuery},content.ilike.${searchQuery}`)
             .order('created_at', { ascending: false })
@@ -35,7 +35,7 @@ router.get('/posts', async (req: Request, res: Response): Promise<void> => {
             (posts || []).map(async (post) => {
                 const { data: blog } = await supabase
                     .from('blogs')
-                    .select('id, name, thumbnail_url')
+                    .select('id, name')
                     .eq('id', post.blog_id)
                     .single()
 
@@ -69,7 +69,7 @@ router.get('/blogs', async (req: Request, res: Response): Promise<void> => {
 
         const { data: blogs, error } = await supabase
             .from('blogs')
-            .select('id, name, description, thumbnail_url, user_id, created_at')
+            .select('id, name, description, user_id, created_at')
             .or(`name.ilike.${searchQuery},description.ilike.${searchQuery}`)
             .order('created_at', { ascending: false })
             .range(offset, offset + limit - 1)
@@ -83,17 +83,36 @@ router.get('/blogs', async (req: Request, res: Response): Promise<void> => {
         const userIds = (blogs || []).map((b) => b.user_id)
         const { data: profiles } = await supabase
             .from('profiles')
-            .select('id, nickname, profile_image_url')
+            .select('id, nickname')
             .in('id', userIds)
+
+        // auth.users에서 카카오 프로필 가져오기
+        const { data: users } = await supabaseAdmin.auth.admin.listUsers()
+        const userMap = new Map(
+            (users?.users || [])
+                .filter((u) => userIds.includes(u.id))
+                .map((u) => [u.id, u.user_metadata?.avatar_url || u.user_metadata?.picture || null])
+        )
 
         const profileMap = new Map(
             (profiles || []).map((p) => [p.id, p])
         )
 
-        const blogsWithProfiles = (blogs || []).map((blog) => ({
-            ...blog,
-            profile: profileMap.get(blog.user_id) || null,
-        }))
+        const blogsWithProfiles = (blogs || []).map((blog) => {
+            const profile = profileMap.get(blog.user_id)
+            const authProfileImage = userMap.get(blog.user_id)
+            return {
+                ...blog,
+                profile: profile ? {
+                    ...profile,
+                    profile_image_url: profile.profile_image_url || authProfileImage,
+                } : {
+                    id: blog.user_id,
+                    nickname: null,
+                    profile_image_url: authProfileImage,
+                },
+            }
+        })
 
         res.json(blogsWithProfiles)
     } catch (error) {
@@ -120,7 +139,6 @@ router.get('/suggest', async (req: Request, res: Response): Promise<void> => {
             supabase
                 .from('posts')
                 .select('id, title, blog_id')
-                .eq('published', true)
                 .ilike('title', searchQuery)
                 .order('created_at', { ascending: false })
                 .limit(5),
@@ -128,7 +146,7 @@ router.get('/suggest', async (req: Request, res: Response): Promise<void> => {
             // 블로그 이름 검색
             supabase
                 .from('blogs')
-                .select('id, name, thumbnail_url')
+                .select('id, name')
                 .ilike('name', searchQuery)
                 .order('created_at', { ascending: false })
                 .limit(3),
