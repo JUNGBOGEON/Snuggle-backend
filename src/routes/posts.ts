@@ -19,8 +19,9 @@ router.get('/', async (req: Request, res: Response): Promise<void> => {
     const { data: posts, error } = await supabase
       .from('posts')
       .select('id, title, content, thumbnail_url, created_at, blog_id')
-      .eq('published', true)
+      // .eq('published', true) // 목록에서는 모든 글 노출 (요청사항 반영)
       .order('created_at', { ascending: false })
+
       .range(offset, offset + limit - 1)
 
     if (error) {
@@ -82,10 +83,10 @@ router.get('/blog/:blogId', async (req: Request, res: Response): Promise<void> =
       .eq('blog_id', blogId)
       .order('created_at', { ascending: false })
 
-    // 소유자가 아니면 공개글만
-    if (!isOwner) {
-      query = query.eq('published', true)
-    }
+    // 소유자가 아니면 공개글만 -> 이제 목록에서는 모두 노출
+    // if (!isOwner) {
+    //   query = query.eq('published', true)
+    // }
 
     const { data, error } = await query
 
@@ -130,18 +131,36 @@ router.get('/:id', async (req: Request, res: Response): Promise<void> => {
       return
     }
 
+    // 디버깅: 전체 포스트 데이터 확인
+    console.log('Post Data Check:', post)
+
     // 비공개 글 접근 권한 확인
-    if (!post.published) {
+    // 요청사항: is_private(TRUE=비공개)만 사용하여 제어
+    const isPrivate = (post as any).is_private === true
+
+    if (isPrivate) {
       let isOwner = false
 
       if (authHeader?.startsWith('Bearer ')) {
         const token = authHeader.split(' ')[1]
         const authClient = createAuthenticatedClient(token)
         const { data: { user } } = await authClient.auth.getUser()
-        isOwner = user?.id === blog.user_id
+
+        // 디버깅 로그
+        console.log('Debug Private Access:', {
+          postId: post.id,
+          postUserId: post.user_id,
+          requestUserId: user?.id,
+          isMatch: user?.id === post.user_id
+        })
+
+        // 요청대로 posts의 user_id와 현재 로그인한 유저의 id를 비교
+        isOwner = user?.id === post.user_id
       }
 
+
       if (!isOwner) {
+        // 권한 없음 시 404 리턴 (보안상 존재 여부 숨김)
         res.status(404).json({ error: 'Post not found' })
         return
       }
@@ -284,7 +303,11 @@ router.patch('/:id', authMiddleware, async (req: AuthenticatedRequest, res: Resp
       // content가 변경되면 썸네일도 업데이트
       updateData.thumbnail_url = extractFirstImageUrl(content)
     }
-    if (published !== undefined) updateData.published = published
+    // if (published !== undefined) updateData.published = published
+
+    // 요청: is_private 추가
+    const { is_private } = req.body
+    if (is_private !== undefined) (updateData as any).is_private = is_private
 
     const { data, error } = await authClient
       .from('posts')
