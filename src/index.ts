@@ -7,6 +7,8 @@ import categoriesRouter from './routes/categories.js'
 import profileRouter from './routes/profile.js'
 import skinsRouter from './routes/skins.js'
 import searchRouter from './routes/search.js'
+import subscribeRouter from './routes/subscribe.js'
+import forumRouter from './routes/forum.js'
 
 const app = express()
 
@@ -14,6 +16,7 @@ const app = express()
 app.use(cors({
   origin: env.frontendUrl,
   credentials: true,
+  allowedHeaders: ['Content-Type', 'Authorization'], // Ensure auth header allowed
 }))
 app.use(express.json())
 
@@ -24,6 +27,8 @@ app.use('/api/categories', categoriesRouter)
 app.use('/api/profile', profileRouter)
 app.use('/api/skins', skinsRouter)
 app.use('/api/search', searchRouter)
+app.use('/api/subscribe', subscribeRouter)
+app.use('/api/forum', forumRouter)
 
 // Health check
 app.get('/health', (req, res) => {
