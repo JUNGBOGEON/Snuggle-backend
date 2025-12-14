@@ -10,6 +10,62 @@ function extractFirstImageUrl(content: string): string | null {
   return imgMatch ? imgMatch[1] : null
 }
 
+// 피드 목록 조회 (구독한 블로거의 글)
+router.get('/feed', authMiddleware, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const user = req.user!
+    const limit = parseInt(req.query.limit as string) || 14
+
+    // 1. 내가 구독한 사람들의 ID (subed_id) 가져오기
+    const { data: subscribed, error: subError } = await supabase
+      .from('subscribe')
+      .select('subed_id')
+      .eq('sub_id', user.id)
+
+    if (subError) throw subError
+
+    const subscribedUserIds = subscribed.map((row: any) => row.subed_id)
+
+    if (subscribedUserIds.length === 0) {
+      res.json([])
+      return
+    }
+
+    // 2. 해당 유저들의 글 가져오기
+    const { data: posts, error: postError } = await supabase
+      .from('posts')
+      .select(`
+            id, title, content, thumbnail_url, created_at, blog_id, user_id,
+            blog:blogs ( name, thumbnail_url, user_id )
+        `)
+      .in('user_id', subscribedUserIds)
+      .eq('published', true)
+      .order('created_at', { ascending: false })
+      .limit(limit)
+
+    if (postError) throw postError
+
+    // Transform response to match frontend expectation
+    const result = posts.map((post: any) => ({
+      id: post.id,
+      title: post.title,
+      content: post.content,
+      thumbnail_url: post.thumbnail_url,
+      created_at: post.created_at,
+      blog_id: post.blog_id,
+      blog: post.blog ? {
+        name: post.blog.name || '',
+        thumbnail_url: post.blog.thumbnail_url || null,
+      } : null,
+    }))
+
+    res.json(result)
+  } catch (error) {
+    console.error('Feed error:', error)
+    res.status(500).json({ error: 'Failed to fetch feed' })
+  }
+})
+
 // 전체 게시글 목록 (공개글만, 인증 불필요)
 router.get('/', async (req: Request, res: Response): Promise<void> => {
   try {
