@@ -35,7 +35,7 @@ router.get('/', async (req: Request, res: Response): Promise<void> => {
           .from('blogs')
           .select('name, thumbnail_url')
           .eq('id', post.blog_id)
-          .single()
+          .maybeSingle()
 
         return {
           ...post,
@@ -70,7 +70,7 @@ router.get('/blog/:blogId', async (req: Request, res: Response): Promise<void> =
           .from('blogs')
           .select('user_id')
           .eq('id', blogId)
-          .single()
+          .maybeSingle()
 
         isOwner = blog?.user_id === user.id
       }
@@ -123,7 +123,7 @@ router.get('/:id', async (req: Request, res: Response): Promise<void> => {
       .from('blogs')
       .select('id, user_id, name, thumbnail_url')
       .eq('id', post.blog_id)
-      .single()
+      .maybeSingle()
 
     if (!blog) {
       res.status(404).json({ error: 'Blog not found' })
@@ -163,7 +163,7 @@ router.get('/:id', async (req: Request, res: Response): Promise<void> => {
       .from('profiles')
       .select('id, nickname, profile_image_url')
       .eq('id', blog.user_id)
-      .single()
+      .maybeSingle()
 
     res.json({
       ...post,
