@@ -46,7 +46,10 @@ router.post(
       const ext = file.originalname.split('.').pop()
       const key = `blog/${user.id}/${Date.now()}.${ext}`
 
-      const url = await uploadToR2(file.buffer, key, file.mimetype)
+      // 영구 이미지 - 1년 캐시
+      const url = await uploadToR2(file.buffer, key, file.mimetype, {
+        isTemporary: false,
+      })
 
       res.json({ url })
     } catch (error) {
@@ -90,7 +93,10 @@ router.post(
       // temp 폴더에 고유한 파일명으로 저장
       const key = `temp/${user.id}/${uuidv4()}.${ext}`
 
-      const url = await uploadToR2(file.buffer, key, file.mimetype)
+      // 임시 이미지 - 1시간 캐시
+      const url = await uploadToR2(file.buffer, key, file.mimetype, {
+        isTemporary: true,
+      })
 
       res.json({ url })
     } catch (error) {
