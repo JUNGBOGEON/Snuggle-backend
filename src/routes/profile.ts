@@ -48,4 +48,127 @@ router.post('/sync', authMiddleware, async (req: AuthenticatedRequest, res: Resp
   }
 })
 
+// 계정 탈퇴
+router.delete('/', authMiddleware, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const user = req.user!
+    const token = req.headers.authorization!.split(' ')[1]
+    const authClient = createAuthenticatedClient(token)
+
+    // 1. 사용자의 모든 블로그 삭제 (RLS로 인해 cascade 삭제됨)
+    const { error: blogsError } = await authClient
+      .from('blogs')
+      .delete()
+      .eq('user_id', user.id)
+
+    if (blogsError) {
+      console.error('Delete blogs error:', blogsError)
+      res.status(500).json({ error: 'Failed to delete blogs' })
+      return
+    }
+
+    // 2. profiles 테이블에서 삭제
+    const { error: profileError } = await authClient
+      .from('profiles')
+      .delete()
+      .eq('id', user.id)
+
+    if (profileError) {
+      console.error('Delete profile error:', profileError)
+      res.status(500).json({ error: 'Failed to delete profile' })
+      return
+    }
+
+    // 3. 성공 응답 (실제 Auth 삭제는 Supabase Admin API 필요)
+    res.json({ success: true, message: 'Account data deleted successfully' })
+  } catch (error) {
+    console.error('Delete account error:', error)
+    res.status(500).json({ error: 'Failed to delete account' })
+  }
+})
+
+// 블로그 소프트 삭제
+router.delete('/blog/:blogId', authMiddleware, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const user = req.user!
+    const { blogId } = req.params
+    const token = req.headers.authorization!.split(' ')[1]
+    const authClient = createAuthenticatedClient(token)
+
+    // 블로그 소유자 확인 및 소프트 삭제
+    const { data, error } = await authClient
+      .from('blogs')
+      .update({ deleted_at: new Date().toISOString() })
+      .eq('id', blogId)
+      .eq('user_id', user.id)
+      .select()
+      .single()
+
+    if (error || !data) {
+      res.status(404).json({ error: 'Blog not found or unauthorized' })
+      return
+    }
+
+    res.json({ success: true, message: 'Blog deleted successfully', deletedAt: data.deleted_at })
+  } catch (error) {
+    console.error('Delete blog error:', error)
+    res.status(500).json({ error: 'Failed to delete blog' })
+  }
+})
+
+// 블로그 복구
+router.post('/blog/:blogId/restore', authMiddleware, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const user = req.user!
+    const { blogId } = req.params
+    const token = req.headers.authorization!.split(' ')[1]
+    const authClient = createAuthenticatedClient(token)
+
+    // 블로그 소유자 확인 및 복구 (deleted_at을 NULL로)
+    const { data, error } = await authClient
+      .from('blogs')
+      .update({ deleted_at: null })
+      .eq('id', blogId)
+      .eq('user_id', user.id)
+      .select()
+      .single()
+
+    if (error || !data) {
+      res.status(404).json({ error: 'Blog not found or unauthorized' })
+      return
+    }
+
+    res.json({ success: true, message: 'Blog restored successfully' })
+  } catch (error) {
+    console.error('Restore blog error:', error)
+    res.status(500).json({ error: 'Failed to restore blog' })
+  }
+})
+
+// 삭제된 블로그 목록 조회
+router.get('/blogs/deleted', authMiddleware, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const user = req.user!
+    const token = req.headers.authorization!.split(' ')[1]
+    const authClient = createAuthenticatedClient(token)
+
+    const { data, error } = await authClient
+      .from('blogs')
+      .select('id, name, description, thumbnail_url, deleted_at')
+      .eq('user_id', user.id)
+      .not('deleted_at', 'is', null)
+      .order('deleted_at', { ascending: false })
+
+    if (error) {
+      res.status(500).json({ error: error.message })
+      return
+    }
+
+    res.json(data || [])
+  } catch (error) {
+    console.error('Get deleted blogs error:', error)
+    res.status(500).json({ error: 'Failed to get deleted blogs' })
+  }
+})
+
 export default router
