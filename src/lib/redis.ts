@@ -16,7 +16,7 @@ if (!globalWithRedis.redis) {
     // Upstash 등 클라우드 Redis 사용 시 TLS 연결 활성화
     tls: env.redis.host.includes('upstash') ? {} : undefined,
     // 연결 끊김 시 자동 재연결 전략 설정
-    retryStrategy: (times) => {
+    retryStrategy: (times: number) => {
       // 재연결 시도 횟수에 따라 대기 시간 증가 (최대 2초)
       const delay = Math.min(times * 50, 2000)
       return delay
@@ -24,7 +24,7 @@ if (!globalWithRedis.redis) {
   })
 
   client.on('connect', () => console.log('Redis Connected'))
-  client.on('error', (err) => console.error('Redis Connection Error:', err))
+  client.on('error', (err: Error) => console.error('Redis Connection Error:', err))
   client.on('reconnecting', () => console.log('Redis Reconnecting...'))
 
   globalWithRedis.redis = client

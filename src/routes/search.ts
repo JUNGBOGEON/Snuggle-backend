@@ -83,7 +83,7 @@ router.get('/blogs', async (req: Request, res: Response): Promise<void> => {
         const userIds = (blogs || []).map((b) => b.user_id)
         const { data: profiles } = await supabase
             .from('profiles')
-            .select('id, nickname')
+            .select('id, nickname, profile_image_url')
             .in('id', userIds)
 
         // auth.users에서 카카오 프로필 가져오기
