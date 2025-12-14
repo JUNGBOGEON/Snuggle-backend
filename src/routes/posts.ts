@@ -1,5 +1,6 @@
 import { Router, Request, Response } from 'express'
 import { AuthenticatedRequest, authMiddleware } from '../middleware/auth.js'
+import { writeLimiter } from '../middleware/rateLimit.js'
 import { createAuthenticatedClient, supabase, supabaseAdmin } from '../services/supabase.service.js'
 
 const router = Router()
@@ -213,7 +214,7 @@ router.get('/:id', async (req: Request, res: Response): Promise<void> => {
 })
 
 // 게시글 생성 (인증 필요)
-router.post('/', authMiddleware, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+router.post('/', writeLimiter, authMiddleware, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const user = req.user!
     const { blog_id, title, content, category_ids, published } = req.body
@@ -280,7 +281,7 @@ router.post('/', authMiddleware, async (req: AuthenticatedRequest, res: Response
 })
 
 // 게시글 수정 (인증 필요)
-router.patch('/:id', authMiddleware, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+router.patch('/:id', writeLimiter, authMiddleware, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const user = req.user!
     const { id } = req.params
@@ -362,7 +363,7 @@ router.patch('/:id', authMiddleware, async (req: AuthenticatedRequest, res: Resp
 })
 
 // 게시글 삭제 (인증 필요)
-router.delete('/:id', authMiddleware, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+router.delete('/:id', writeLimiter, authMiddleware, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const user = req.user!
     const { id } = req.params
