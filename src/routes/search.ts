@@ -139,7 +139,6 @@ router.get('/suggest', async (req: Request, res: Response): Promise<void> => {
             supabase
                 .from('posts')
                 .select('id, title, blog_id')
-                .eq('published', true)
                 .ilike('title', searchQuery)
                 .order('created_at', { ascending: false })
                 .limit(5),

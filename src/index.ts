@@ -25,6 +25,7 @@ app.set('trust proxy', 1)
 app.use(cors({
   origin: env.frontendUrl,
   credentials: true,
+  allowedHeaders: ['Content-Type', 'Authorization'], // Ensure auth header allowed
 }))
 
 // Global rate limit (DoS 방지 - 초당 10회 제한)
