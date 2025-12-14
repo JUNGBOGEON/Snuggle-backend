@@ -36,7 +36,7 @@ router.get('/', async (req: Request, res: Response): Promise<void> => {
           .from('blogs')
           .select('name, thumbnail_url, user_id')
           .eq('id', post.blog_id)
-          .single()
+          .maybeSingle()
 
         let profileImageUrl = blog?.thumbnail_url
         if (!profileImageUrl && blog?.user_id) {
@@ -92,7 +92,7 @@ router.get('/blog/:blogId', async (req: Request, res: Response): Promise<void> =
           .from('blogs')
           .select('user_id')
           .eq('id', blogId)
-          .single()
+          .maybeSingle()
 
         isOwner = blog?.user_id === user.id
       }
@@ -145,7 +145,7 @@ router.get('/:id', async (req: Request, res: Response): Promise<void> => {
       .from('blogs')
       .select('id, user_id, name, thumbnail_url')
       .eq('id', post.blog_id)
-      .single()
+      .maybeSingle()
 
     if (!blog) {
       res.status(404).json({ error: 'Blog not found' })
@@ -185,7 +185,7 @@ router.get('/:id', async (req: Request, res: Response): Promise<void> => {
       .from('profiles')
       .select('id, nickname, profile_image_url')
       .eq('id', blog.user_id)
-      .single()
+      .maybeSingle()
 
     // profile_image_url이 없으면 auth.users에서 카카오 프로필 가져오기
     let profileImageUrl = profile?.profile_image_url
