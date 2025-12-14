@@ -9,8 +9,11 @@ router.get('/', async (req: Request, res: Response): Promise<void> => {
     try {
         const limit = parseInt(req.query.limit as string) || 20
         const offset = parseInt(req.query.offset as string) || 0
+        const category = req.query.category as string
+        const search = req.query.q as string
+        const searchType = req.query.type as string || 'title_content'
 
-        const { data: forums, error } = await supabase
+        let query = supabase
             .from('forums')
             .select(`
         *,
@@ -20,23 +23,38 @@ router.get('/', async (req: Request, res: Response): Promise<void> => {
             .order('created_at', { ascending: false })
             .range(offset, offset + limit - 1)
 
+        // Filter by Category (Title prefix)
+        // If category is provided and not '전체'
+        if (category && category !== '전체') {
+            query = query.ilike('title', `[${category}]%`)
+        }
+
+        // Search
+        if (search) {
+            if (searchType === 'title') {
+                query = query.ilike('title', `%${search}%`)
+            } else if (searchType === 'content') {
+                query = query.ilike('description', `%${search}%`)
+            } else {
+                // title_content
+                query = query.or(`title.ilike.%${search}%,description.ilike.%${search}%`)
+            }
+        }
+
+        const { data: forums, error } = await query
+
         if (error) {
             console.error('Fetch forums error:', error)
             res.status(500).json({ error: error.message })
             return
         }
 
-        // Transform count array to number if needed, though supabase returns array of objects with count
-        // select('*, ..., comments:forum_comments(count)') returns { ..., comments: [{ count: N }] } typically?
-        // Actually Supabase select count is tricky in joins.
-        // The previous frontend code was: comments:forum_comments(count)
-        // It returns comments: [{ count: ... }] usually.
-        // Let's ensure the response format matches what standard fetch returns.
-
-        // Map to clean structure if necessary, or just return as is.
-        // Frontend expects: comment_count field.
+        // Transform count array to number if needed
         const result = forums.map((item: any) => ({
             ...item,
+            // Remove category prefix from title for display if desired? 
+            // Or keep it. Design shows titles. Let's keep it but UI might parse it.
+            // Actually, if we use prefix for storage, we should probably just return as is.
             comment_count: item.comments?.[0]?.count || 0,
             view_count: 0 // Mock
         }))
@@ -81,7 +99,10 @@ router.get('/:id', async (req: Request, res: Response): Promise<void> => {
 router.post('/', authMiddleware, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
     try {
         const user = req.user!
-        const { title, description, blog_id } = req.body
+        const { title, description, blog_id, category } = req.body
+
+        // Prepend category to title to support filtering without schema change
+        const finalTitle = category ? `[${category}] ${title}` : title
 
         const token = req.headers.authorization!.split(' ')[1]
         const authClient = createAuthenticatedClient(token)
@@ -89,7 +110,7 @@ router.post('/', authMiddleware, async (req: AuthenticatedRequest, res: Response
         const { data, error } = await authClient
             .from('forums')
             .insert({
-                title,
+                title: finalTitle,
                 description,
                 user_id: user.id,
                 blog_id
