@@ -20,7 +20,6 @@ router.get('/posts', async (req: Request, res: Response): Promise<void> => {
         const { data: posts, error } = await supabase
             .from('posts')
             .select('id, title, content, thumbnail_url, created_at, blog_id')
-            .eq('published', true)
             .or(`title.ilike.${searchQuery},content.ilike.${searchQuery}`)
             .order('created_at', { ascending: false })
             .range(offset, offset + limit - 1)
@@ -120,7 +119,6 @@ router.get('/suggest', async (req: Request, res: Response): Promise<void> => {
             supabase
                 .from('posts')
                 .select('id, title, blog_id')
-                .eq('published', true)
                 .ilike('title', searchQuery)
                 .order('created_at', { ascending: false })
                 .limit(5),
